@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>ریزموتور — موتور بازی مینیمال</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#11161d; --line:#1f2733; --text:#d9e2ec;
+    --accent:#5fd0a0; --accent2:#e8b74f; --muted:#5c6b7a; --err:#e8615f;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:'Courier New', ui-monospace, monospace;
+    height:100vh; display:flex; flex-direction:column;
+  }
+  header{
+    padding:10px 16px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+  }
+  header h1{font-size:15px; margin:0; color:var(--accent); font-weight:700; letter-spacing:.5px;}
+  header .sub{font-size:11px; color:var(--muted); direction:ltr; text-align:left;}
+  main{flex:1; display:flex; min-height:0;}
+  .pane{display:flex; flex-direction:column; min-width:0;}
+  #editorPane{width:46%; border-left:1px solid var(--line);}
+  #viewPane{flex:1; padding:14px; align-items:center; justify-content:flex-start;}
+  .bar{
+    display:flex; gap:8px; padding:8px 10px; border-bottom:1px solid var(--line);
+    background:var(--panel);
+  }
+  button{
+    background:var(--accent); color:#06110c; border:none; border-radius:5px;
+    padding:7px 14px; font-weight:700; cursor:pointer; font-family:inherit; font-size:12px;
+  }
+  button.secondary{background:transparent; color:var(--text); border:1px solid var(--line);}
+  button:hover{filter:brightness(1.08);}
+  textarea#code{
+    flex:1; width:100%; background:#0a0e13; color:#c9d6e3; border:none; outline:none;
+    resize:none; padding:14px; font-family:'Courier New', monospace; font-size:13px;
+    line-height:1.55; direction:ltr; text-align:left; tab-size:2;
+  }
+  #canvasWrap{position:relative; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:#000;}
+  canvas{display:block; image-rendering:pixelated;}
+  #log{
+    height:110px; overflow-y:auto; background:#0a0e13; border-top:1px solid var(--line);
+    padding:8px 12px; font-size:11px; direction:ltr; text-align:left; color:var(--muted);
+  }
+  #log .err{color:var(--err);}
+  #log .ok{color:var(--accent);}
+  .hint{font-size:11px; color:var(--muted); padding:10px 4px 0; line-height:1.9;}
+  .hint b{color:var(--accent2);}
+  code.k{color:var(--accent2); direction:ltr; display:inline-block;}
+  select{
+    background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:5px; padding:6px 8px; font-family:inherit; font-size:12px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ریزموتور&nbsp;// یه هسته‌ی کوچیک، آزادی کامل با کد</h1>
+  <div class="sub">RizEngine v0.1 — minimal core, free-form via script</div>
+</header>
+
+<main>
+  <div class="pane" id="viewPane">
+    <div id="canvasWrap">
+      <canvas id="game" width="480" height="320"></canvas>
+    </div>
+    <div class="hint">
+      کنترل نمونه‌بازی: <b>← → یا A/D</b> حرکت، <b>Space</b> پرش. کد سمت راست رو عوض کن و
+      <b>Run</b> بزن — هر چی بنویسی همون بازی میشه. کل API با <code class="k">E.</code> شروع میشه.
+    </div>
+  </div>
+
+  <div class="pane" id="editorPane">
+    <div class="bar">
+      <select id="examples">
+        <option value="platformer">نمونه: پلتفرمر ساده</option>
+        <option value="bullet">نمونه: چرخش و گلوله</option>
+        <option value="pong">نمونه: پونگ تک‌نفره</option>
+        <option value="empty">صفحه‌ی خالی (فقط موتور)</option>
+      </select>
+      <button id="run">▶ Run</button>
+      <button class="secondary" id="reset">Reset State</button>
+    </div>
+    <textarea id="code" spellcheck="false"></textarea>
+    <div id="log"></div>
+  </div>
+</main>
+
+<script>
+/* =====================================================================
+   RizEngine — هسته‌ی موتور. کد زیر همون "کرنل"ه.
+   API که در اختیار بازیکن/برنامه‌نویس (کد سمت راست) قرار می‌گیره: window.E
+   فلسفه: هسته کوچیک و بدون فرض درباره‌ی نوع بازی. هر رفتاری (فیزیک،
+   دشمن، امتیاز، انیمیشن) صرفاً کد جاوااسکریپتیه که خودت با E می‌نویسی.
+===================================================================== */
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  let entities = [];
+  let idCounter = 1;
+  let running = false;
+  let rafId = null;
+  let lastTime = 0;
+  let keys = {};
+  let updateHooks = [];
+  let drawHooks = [];
+  let camera = {x:0, y:0};
+  let bgColor = '#0b0f14';
+
+  window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if([' ','arrowup','arrowdown','arrowleft','arrowright'].includes(e.key.toLowerCase())) e.preventDefault(); });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  function aabb(a,b){
+    return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+  }
+
+  function makeEntity(x,y,opts){
+    opts = opts || {};
+    const e = {
+      id: idCounter++,
+      x: x||0, y: y||0,
+      w: opts.w ?? 20, h: opts.h ?? 20,
+      vx: opts.vx ?? 0, vy: opts.vy ?? 0,
+      color: opts.color ?? '#5fd0a0',
+      tag: opts.tag ?? 'entity',
+      shape: opts.shape ?? 'rect', // 'rect' | 'circle'
+      text: opts.text ?? null,
+      gravity: opts.gravity ?? 0,
+      friction: opts.friction ?? 1,
+      solid: opts.solid ?? false,
+      alive: true,
+      data: opts.data ?? {},
+      _update: null,
+      _draw: null,
+      update(fn){ this._update = fn; return this; },
+      draw(fn){ this._draw = fn; return this; },
+      kill(){ this.alive = false; },
+      hits(other){ return aabb(this, other); },
+      hitsAny(tag){ return entities.some(o => o.alive && o !== this && o.tag === tag && aabb(this,o)); },
+      moveTowards(tx,ty,speed){
+        const dx=tx-this.x, dy=ty-this.y, d=Math.hypot(dx,dy)||1;
+        this.vx = dx/d*speed; this.vy = dy/d*speed;
+      }
+    };
+    entities.push(e);
+    return e;
+  }
+
+  function step(dt){
+    // physics + custom update hooks
+    for(const e of entities){
+      if(!e.alive) continue;
+      if(e._update) e._update(e, dt, keys);
+      e.vy += e.gravity * dt;
+      e.vx *= e.friction;
+      e.x += e.vx * dt;
+      e.y += e.vy * dt;
+    }
+    for(const fn of updateHooks) fn(dt, keys);
+    entities = entities.filter(e => e.alive);
+  }
+
+  function render(){
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0,0,canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+    for(const e of entities){
+      if(e._draw){ e._draw(e, ctx); continue; }
+      ctx.fillStyle = e.color;
+      if(e.shape === 'circle'){
+        ctx.beginPath();
+        ctx.arc(e.x + e.w/2, e.y + e.h/2, e.w/2, 0, Math.PI*2);
+        ctx.fill();
+      } else {
+        ctx.fillRect(e.x, e.y, e.w, e.h);
+      }
+      if(e.text){
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px monospace';
+        ctx.fillText(e.text, e.x, e.y - 4);
+      }
+    }
+    ctx.restore();
+    for(const fn of drawHooks) fn(ctx);
+  }
+
+  function loop(ts){
+    if(!running) return;
+    const dt = Math.min((ts - lastTime)/1000, 0.05) || 0;
+    lastTime = ts;
+    step(dt);
+    render();
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function resetState(){
+    entities = [];
+    updateHooks = [];
+    drawHooks = [];
+    keys = {};
+    camera = {x:0,y:0};
+    bgColor = '#0b0f14';
+  }
+
+  function start(){
+    if(running) return;
+    running = true;
+    lastTime = performance.now();
+    rafId = requestAnimationFrame(loop);
+  }
+  function stop(){
+    running = false;
+    if(rafId) cancelAnimationFrame(rafId);
+  }
+
+  // ---- Public API: هسته‌ای که کد کاربر با اون کار می‌کنه ----
+  window.E = {
+    canvas, ctx,
+    width: canvas.width, height: canvas.height,
+    entity: makeEntity,
+    all: () => entities,
+    byTag: (tag) => entities.filter(e => e.alive && e.tag === tag),
+    key: (name) => !!keys[name.toLowerCase()],
+    onUpdate: (fn) => updateHooks.push(fn),
+    onDraw: (fn) => drawHooks.push(fn),
+    setBackground: (c) => bgColor = c,
+    setCamera: (x,y) => { camera.x = x; camera.y = y; },
+    clearAll: () => { entities = []; },
+    aabb,
+    start, stop,
+    random: (a,b) => a + Math.random()*(b-a),
+  };
+  window._engineResetState = resetState;
+  window._engineStart = start;
+  window._engineStop = stop;
+})();
+</script>
+
+<script>
+/* ------------------------- IDE / اجرای کد ------------------------- */
+const codeEl = document.getElementById('code');
+const logEl = document.getElementById('log');
+const runBtn = document.getElementById('run');
+const resetBtn = document.getElementById('reset');
+const examplesEl = document.getElementById('examples');
+
+function log(msg, cls){
+  const line = document.createElement('div');
+  if(cls) line.className = cls;
+  line.textContent = msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function runCode(){
+  window._engineStop();
+  window._engineResetState();
+  logEl.innerHTML = '';
+  try{
+    const fn = new Function('E', codeEl.value);
+    fn(window.E);
+    window._engineStart();
+    log('✓ اجرا شد بدون خطا', 'ok');
+  }catch(err){
+    log('✗ خطا: ' + err.message, 'err');
+    console.error(err);
+  }
+}
+
+runBtn.addEventListener('click', runCode);
+resetBtn.addEventListener('click', () => {
+  window._engineStop();
+  window._engineResetState();
+  logEl.innerHTML = '';
+  log('حالت موتور پاک شد. Run بزن تا کد فعلی دوباره اجرا شه.', 'ok');
+});
+
+const EXAMPLES = {
+
+platformer: `// ---- پلتفرمر خیلی ساده ----
+E.setBackground('#10151c');
+
+const ground = E.entity(0, 280, {w:480, h:40, color:'#2a3542', tag:'ground', solid:true});
+
+const player = E.entity(40, 200, {w:24, h:24, color:'#5fd0a0', tag:'player', gravity:900});
+let onGround = false;
+
+player.update((p, dt) => {
+  const speed = 160;
+  if(E.key('arrowleft') || E.key('a')) p.vx = -speed;
+  else if(E.key('arrowright') || E.key('d')) p.vx = speed;
+  else p.vx = 0;
+
+  if((E.key(' ') || E.key('arrowup')) && onGround){
+    p.vy = -360;
+    onGround = false;
+  }
+
+  // برخورد ساده با زمین
+  if(p.hits(ground) && p.vy >= 0){
+    p.y = ground.y - p.h;
+    p.vy = 0;
+    onGround = true;
+  }
+  if(p.x < 0) p.x = 0;
+  if(p.x + p.w > E.width) p.x = E.width - p.w;
+});
+
+// چند تا سکه که با گرفتنشون امتیاز میدن
+let score = 0;
+for(let i=0;i<5;i++){
+  const coin = E.entity(80 + i*70, 220, {w:12, h:12, color:'#e8b74f', tag:'coin', shape:'circle'});
+}
+
+E.onUpdate(() => {
+  for(const c of E.byTag('coin')){
+    if(player.hits(c)){ c.kill(); score += 10; }
+  }
+});
+
+E.onDraw((ctx) => {
+  ctx.fillStyle = '#d9e2ec';
+  ctx.font = '14px monospace';
+  ctx.fillText('امتیاز: ' + score, 10, 20);
+});
+`,
+
+bullet: `// ---- چرخش سفینه + شلیک گلوله ----
+E.setBackground('#05070a');
+
+const ship = E.entity(230, 150, {w:20, h:20, color:'#5fd0a0', tag:'ship'});
+let angle = 0;
+let cooldown = 0;
+
+ship.draw((s, ctx) => {
+  ctx.save();
+  ctx.translate(s.x + s.w/2, s.y + s.h/2);
+  ctx.rotate(angle);
+  ctx.fillStyle = s.color;
+  ctx.beginPath();
+  ctx.moveTo(12,0); ctx.lineTo(-8,8); ctx.lineTo(-8,-8);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+});
+
+E.onUpdate((dt) => {
+  if(E.key('arrowleft') || E.key('a')) angle -= 2.5*dt;
+  if(E.key('arrowright') || E.key('d')) angle += 2.5*dt;
+  cooldown -= dt;
+
+  if(E.key(' ') && cooldown <= 0){
+    cooldown = 0.25;
+    const b = E.entity(ship.x+ship.w/2, ship.y+ship.h/2, {w:4,h:4, color:'#e8b74f', tag:'bullet', shape:'circle'});
+    b.vx = Math.cos(angle)*260;
+    b.vy = Math.sin(angle)*260;
+    b.update((self) => {
+      if(self.x < 0 || self.x > E.width || self.y < 0 || self.y > E.height) self.kill();
+    });
+  }
+});
+`,
+
+pong: `// ---- پونگ تک‌نفره در برابر دیوار ----
+E.setBackground('#0b0f14');
+
+const paddle = E.entity(200, 300, {w:70, h:10, color:'#5fd0a0', tag:'paddle'});
+const ball = E.entity(230, 150, {w:10, h:10, color:'#e8b74f', tag:'ball', shape:'circle'});
+ball.vx = 140; ball.vy = -180;
+
+let lives = 3;
+
+paddle.update((p) => {
+  const speed = 260;
+  if(E.key('arrowleft') || E.key('a')) p.x -= speed*(1/60);
+  if(E.key('arrowright') || E.key('d')) p.x += speed*(1/60);
+  p.x = Math.max(0, Math.min(E.width - p.w, p.x));
+});
+
+ball.update((b) => {
+  if(b.x <= 0 || b.x + b.w >= E.width) b.vx *= -1;
+  if(b.y <= 0) b.vy *= -1;
+  if(b.hits(paddle) && b.vy > 0) b.vy *= -1;
+  if(b.y > E.height){
+    lives -= 1;
+    b.x = 230; b.y = 150; b.vx = 140; b.vy = -180;
+  }
+});
+
+E.onDraw((ctx) => {
+  ctx.fillStyle = '#d9e2ec';
+  ctx.font = '14px monospace';
+  ctx.fillText('جون: ' + lives, 10, 20);
+});
+`,
+
+empty: `// فقط موتور، بدون هیچ چیز از پیش‌ساخته.
+// از E.entity(x, y, opts) برای ساخت هر چیزی استفاده کن.
+E.setBackground('#0b0f14');
+
+const box = E.entity(100, 100, {w:30, h:30, color:'#5fd0a0'});
+box.update((b, dt) => {
+  b.x += 60 * dt;
+  if(b.x > E.width) b.x = -b.w;
+});
+`
+};
+
+examplesEl.addEventListener('change', () => {
+  codeEl.value = EXAMPLES[examplesEl.value];
+  runCode();
+});
+
+codeEl.value = EXAMPLES.platformer;
+runCode();
+</script>
+
+</body>
+</html>
