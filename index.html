@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>My Game</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #111; overflow: hidden; height: 100%; }
+  #game-container { display: flex; align-items: center; justify-content: center; height: 100vh; }
+  #ui-bar {
+    position: fixed; top: 8px; left: 8px; z-index: 10000;
+    display: flex; gap: 8px;
+  }
+  #ui-bar button {
+    font-family: sans-serif; padding: 8px 12px; border-radius: 8px; border: none;
+    background: #ffcc00; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+  <div id="ui-bar">
+    <button id="uploadBtn">آپلود عکس</button>
+    <button id="saveBtn">ذخیره</button>
+    <button id="loadBtn">بارگذاری</button>
+  </div>
+  <div id="game-container"></div>
+
+  <!-- Phaser from CDN — no bundler/build step needed for development -->
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+  <script type="module" src="src/main.js"></script>
+
+  <script>
+    // Simple save/load buttons wired to the engine once it exists.
+    document.getElementById('saveBtn').addEventListener('click', () => {
+      window.ENGINE?.getSystem('save').save('slot1');
+      alert('ذخیره شد');
+    });
+    document.getElementById('loadBtn').addEventListener('click', () => {
+      window.ENGINE?.getSystem('save').load('slot1');
+      alert('بارگذاری شد');
+    });
+  </script>
+</body>
+</html>
